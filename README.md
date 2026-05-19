@@ -33,6 +33,16 @@ bash quickstart.sh
 START_DATE=2024-01-01 END_DATE=2024-03-31 SYMBOLS=000001.SZ,600036.SH bash quickstart.sh
 ```
 
+### 1.4 一键全市场启动（全A股）
+```bash
+bash quickstart_full_market.sh
+```
+
+可选环境变量（示例）：
+```bash
+START_DATE=2024-01-01 END_DATE=2024-06-30 BATCH_SIZE=80 AK_START_DATE=20240101 AK_END_DATE=20240630 bash quickstart_full_market.sh
+```
+
 ---
 
 ## 2. 目录结构（核心）
