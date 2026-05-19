@@ -20,7 +20,17 @@
 ### 1.2 安装依赖
 ```bash
 python -m pip install -U pip
-python -m pip install -e .
+python -m pip install -r requirements.txt
+```
+
+### 1.3 一键快速启动（数据抓取 + 构建 + 校验）
+```bash
+bash quickstart.sh
+```
+
+可选环境变量（示例）：
+```bash
+START_DATE=2024-01-01 END_DATE=2024-03-31 SYMBOLS=000001.SZ,600036.SH bash quickstart.sh
 ```
 
 ---
