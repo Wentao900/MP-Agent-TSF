@@ -43,6 +43,21 @@ bash quickstart_full_market.sh
 START_DATE=2024-01-01 END_DATE=2024-06-30 BATCH_SIZE=80 AK_START_DATE=20240101 AK_END_DATE=20240630 bash quickstart_full_market.sh
 ```
 
+### 1.5 失败后续跑（断点恢复）
+```bash
+bash quickstart_resume.sh
+```
+
+可选环境变量（示例）：
+```bash
+BATCH_SIZE=80 AK_START_DATE=20240101 AK_END_DATE=20240630 bash quickstart_resume.sh
+```
+
+如需顺带重试部分公告附件下载（前 N 条）：
+```bash
+RETRY_FAILED_MAX=500 bash quickstart_resume.sh
+```
+
 ---
 
 ## 2. 目录结构（核心）
