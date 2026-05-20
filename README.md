@@ -20,8 +20,52 @@
 ### 1.2 安装依赖
 ```bash
 python -m pip install -U pip
+python -m pip install -r requirements.txt
 python -m pip install -e .
 ```
+
+### 1.3 一键快速启动（数据抓取 + 构建 + 校验）
+```bash
+bash quickstart.sh
+```
+
+可选环境变量（示例）：
+```bash
+START_DATE=2024-01-01 END_DATE=2024-03-31 SYMBOLS=000001.SZ,600036.SH bash quickstart.sh
+```
+
+### 1.4 一键全市场启动（全A股）
+```bash
+bash quickstart_full_market.sh
+```
+
+可选环境变量（示例）：
+```bash
+START_DATE=2024-01-01 END_DATE=2024-06-30 BATCH_SIZE=80 AK_START_DATE=20240101 AK_END_DATE=20240630 bash quickstart_full_market.sh
+```
+
+### 1.5 失败后续跑（断点恢复）
+```bash
+bash quickstart_resume.sh
+```
+
+可选环境变量（示例）：
+```bash
+BATCH_SIZE=80 AK_START_DATE=20240101 AK_END_DATE=20240630 bash quickstart_resume.sh
+```
+
+如需顺带重试部分公告附件下载（前 N 条）：
+```bash
+RETRY_FAILED_MAX=500 bash quickstart_resume.sh
+```
+
+### 1.6 Workshop 论文数据（50 股 × 3 年，推荐）
+
+```bash
+./scripts/start_workshop_fetch.sh
+```
+
+详见 [`docs/WORKSHOP_SUBMISSION.md`](docs/WORKSHOP_SUBMISSION.md)。
 
 ---
 
