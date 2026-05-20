@@ -1,0 +1,33 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.eggs/
+dist/
+build/
+.venv/
+venv/
+.env
+.env.*
+
+# Test / tooling
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+
+# IDE / local
+.idea/
+.vscode/
+.claude/
+*.swp
+.DS_Store
+
+# Data & artifacts (regenerate via scripts/)
+raw/
+logs/
+outputs/
+
+# Large or generated checkpoints
+*.log

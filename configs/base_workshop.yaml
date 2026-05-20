@@ -1,0 +1,10 @@
+extends: base.yaml
+
+data:
+  # Workshop 推荐：时间外推 OOD（train 2022, val 2023, test 2024）
+  split_mode: date
+  val_start_date: "2023-01-01"
+  test_start_date: "2024-01-01"
+
+train:
+  epochs: 5

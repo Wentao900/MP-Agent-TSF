@@ -1,0 +1,7 @@
+extends: base_workshop.yaml
+experiment:
+  name: memory_reflector_workshop
+ablation:
+  use_memory: true
+  use_reflector: true
+  use_explain_loss: true

@@ -1,0 +1,48 @@
+experiment:
+  name: baseline
+  seed: 42
+  output_root: outputs
+
+data:
+  price_csv: outputs/data/price.csv
+  text_csv: outputs/data/text.csv
+  timestamp_col: timestamp
+  symbol_col: symbol
+  train_ratio: 0.6
+  val_ratio: 0.2
+  test_ratio: 0.2
+  seq_len: 32
+  prediction_horizon: 1
+  market_state_window: 30
+
+features:
+  price_cols: [open, high, low, close, volume, ret_1, ret_5, vol_5]
+  text_cols: [sentiment, relevance, event_strength]
+
+model:
+  hidden_dim: 64
+  memory_dim: 32
+  num_actions: 3
+  reflector_k: 20
+
+train:
+  batch_size: 64
+  epochs: 3
+  lr: 0.001
+  weight_decay: 0.0001
+  sequence_len: 1
+  lambda_act: 1.0
+  lambda_pred: 0.3
+  lambda_exp: 0.1
+  lambda_smooth: 0.05
+  lambda_reflect_corr: 0.1
+  lambda_exp_faith: 0.1
+  lambda_exp_stability: 0.1
+  exp_perturb_ratio: 0.15
+  reward_norm_scale: 100.0
+
+backtest:
+  initial_cash: 100000.0
+  fee_rate: 0.0005
+  slippage_rate: 0.0005
+  max_position: 1.0

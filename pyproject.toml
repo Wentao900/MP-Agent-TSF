@@ -1,0 +1,25 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "imtsa"
+version = "0.1.0"
+description = "Interpretable Multimodal Time-Series Agent research scaffold"
+readme = "multimodal_timeseries_agent_finance_paper_draft_cn.md"
+requires-python = ">=3.10"
+dependencies = [
+  "numpy>=1.25",
+  "pandas>=2.0",
+  "pyyaml>=6.0",
+  "scikit-learn>=1.4",
+  "scipy>=1.11",
+  "torch>=2.2",
+  "pytest>=8.0",
+]
+
+[tool.setuptools]
+package-dir = {"" = "src"}
+
+[tool.setuptools.packages.find]
+where = ["src"]

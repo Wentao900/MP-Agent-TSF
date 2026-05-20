@@ -1,0 +1,7 @@
+extends: base.yaml
+experiment:
+  name: memory_reflector
+ablation:
+  use_memory: true
+  use_reflector: true
+  use_explain_loss: true
