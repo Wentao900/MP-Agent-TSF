@@ -1,6 +1,9 @@
 extends: base.yaml
 experiment:
   name: memory
+train:
+  sequence_len: 2
+  use_trajectory_unroll: true
 ablation:
   use_memory: true
   use_reflector: false

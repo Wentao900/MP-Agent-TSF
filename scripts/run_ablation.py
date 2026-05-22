@@ -40,7 +40,16 @@ def main() -> None:
             explain_summary = pd.read_json(exp_dir / "explain_summary.json", typ="series").to_dict()
             regime = pd.read_csv(exp_dir / "risk_return_explain_state_table.csv")
 
-            base_row = {"experiment": name, "seed": seed_offset, **metrics.to_dict()}
+            base_row = {"experiment": name, "seed": seed_offset, "eval_split": "test", **metrics.to_dict()}
+            holdout_metrics_path = exp_dir / "holdout" / "metrics.json"
+            if holdout_metrics_path.exists():
+                holdout_metrics = pd.read_json(holdout_metrics_path, typ="series")
+                rows.append({
+                    "experiment": name,
+                    "seed": seed_offset,
+                    "eval_split": "holdout",
+                    **holdout_metrics.to_dict(),
+                })
             rows.append(base_row)
             rq_rows.append({
                 "experiment": name,

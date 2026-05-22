@@ -101,13 +101,20 @@ outputs/
 
 ## 3. 快速开始（最小闭环）
 
-### Step 1) 生成示例数据
+### Step 1) 生成 Parquet 训练数据（**必须**）
 ```bash
+# 示例：先造 CSV，再编译为指南格式 parquet
 python scripts/prepare_data.py
+python scripts/build_datasets.py
+python scripts/validate_dataset_contract.py
 ```
-将生成：
-- `outputs/data/price.csv`
-- `outputs/data/text.csv`
+产物：
+- `data/processed/aligned_daily_multimodal.parquet`
+- `data/processed/labels_trading.parquet`
+
+训练/回测**仅**读取上述 parquet（`data.source: parquet`），见 `docs/EXPERIMENT_DATA_GUIDE.md`。
+
+默认已启用指南特性：`split` 列切分、`L=60` 按 ticker 滑窗、train-only scaler、Memory/Reflector 轨迹 `sequence_len`、`market_regime` 分状态回测、**RQ4 holdout**（`outputs/<exp>/holdout/`）。
 
 ### Step 2) 单实验训练 + 回测（以 baseline 为例）
 ```bash

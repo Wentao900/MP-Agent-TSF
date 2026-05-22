@@ -67,6 +67,8 @@ def _run_seq(
     device = x_price.device
     bs = x_price.shape[0]
     seq_unroll = int(tcfg.get("sequence_len", 1))
+    if not bool(tcfg.get("use_trajectory_unroll", False)):
+        seq_unroll = 1
 
     prev_action = torch.zeros(bs, model.num_actions, device=device)
     prev_reward = torch.zeros(bs, device=device)

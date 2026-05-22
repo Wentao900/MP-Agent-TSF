@@ -9,7 +9,8 @@ REGIMES = ["bull", "bear", "sideways"]
 
 def compute_metrics(equity_curve: pd.Series, trades: pd.DataFrame) -> dict:
     returns = equity_curve.pct_change().fillna(0.0)
-    sharpe = 0.0 if returns.std() == 0 else (returns.mean() / returns.std()) * np.sqrt(252 * 390)
+    ann_factor = np.sqrt(252)
+    sharpe = 0.0 if returns.std() == 0 else (returns.mean() / returns.std()) * ann_factor
     cummax = equity_curve.cummax()
     drawdown = (equity_curve / cummax - 1.0).min()
     win_rate = float((trades["pnl"] > 0).mean()) if len(trades) else 0.0

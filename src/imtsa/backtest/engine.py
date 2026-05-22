@@ -15,7 +15,23 @@ from imtsa.models.policy_baseline import IMTSAPolicy
 from imtsa.utils import dump_json
 
 
-def run_backtest(test_bundle: dict, test_df: pd.DataFrame, config: dict, model_path: Path, out_dir: Path) -> dict:
+def _target_position(action: int, position: float) -> float:
+    """Guide §4.5: 0=Hold, 1=Buy, 2=Sell."""
+    if action == 1:
+        return 1.0
+    if action == 2:
+        return 0.0
+    return position
+
+
+def run_backtest(
+    test_bundle: dict,
+    test_df: pd.DataFrame,
+    config: dict,
+    model_path: Path,
+    out_dir: Path,
+    output_subdir: str | None = None,
+) -> dict:
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     model = IMTSAPolicy(test_bundle["x_price"].shape[-1], test_bundle["x_text"].shape[-1], config).to(device)
     model.load_state_dict(torch.load(model_path, map_location=device))
@@ -67,15 +83,23 @@ def run_backtest(test_bundle: dict, test_df: pd.DataFrame, config: dict, model_p
             "reward_hist": state_reward_hist,
         })
 
-        target_pos = 1.0 if action == 0 else (-1.0 if action == 1 else 0.0)
+        target_pos = _target_position(action, position)
         delta_pos = target_pos - position
 
         row_idx = int(test_bundle["row_index"][i])
-        close = float(test_df.iloc[row_idx]["close"])
-        nxt = float(test_df.iloc[min(row_idx + 1, len(test_df) - 1)]["close"])
+        row = test_df.iloc[row_idx]
+        close = float(row["close"] if "close" in row.index else row["Close"])
+        nxt = float(
+            test_df.iloc[min(row_idx + 1, len(test_df) - 1)]["close"]
+            if "close" in test_df.columns
+            else test_df.iloc[min(row_idx + 1, len(test_df) - 1)]["Close"]
+        )
 
         cost = calc_trade_cost(delta_pos, close, fee_rate, slippage_rate)
-        pnl = position * (nxt - close) - cost
+        if bool(config.get("backtest", {}).get("use_label_rewards", False)) and "r_net" in row.index:
+            pnl = float(row["r_net"]) - cost
+        else:
+            pnl = position * (nxt - close) - cost
 
         cash += pnl
         position = target_pos
@@ -176,15 +200,18 @@ def run_backtest(test_bundle: dict, test_df: pd.DataFrame, config: dict, model_p
         }
     ])
 
-    trades.to_csv(out_dir / "trades.csv", index=False)
-    dump_json(out_dir / "metrics.json", metrics)
+    artifact_dir = out_dir / output_subdir if output_subdir else out_dir
+    artifact_dir.mkdir(parents=True, exist_ok=True)
 
-    explain_step.to_csv(out_dir / "explain_step.csv", index=False)
-    dump_json(out_dir / "explain_summary.json", explain_summary)
-    tradeoff.to_csv(out_dir / "tradeoff_summary.csv", index=False)
+    trades.to_csv(artifact_dir / "trades.csv", index=False)
+    dump_json(artifact_dir / "metrics.json", metrics)
 
-    metrics_by_regime.to_csv(out_dir / "metrics_by_regime.csv", index=False)
-    explain_regime.to_csv(out_dir / "explain_by_regime.csv", index=False)
-    state_table.to_csv(out_dir / "risk_return_explain_state_table.csv", index=False)
+    explain_step.to_csv(artifact_dir / "explain_step.csv", index=False)
+    dump_json(artifact_dir / "explain_summary.json", explain_summary)
+    tradeoff.to_csv(artifact_dir / "tradeoff_summary.csv", index=False)
+
+    metrics_by_regime.to_csv(artifact_dir / "metrics_by_regime.csv", index=False)
+    explain_regime.to_csv(artifact_dir / "explain_by_regime.csv", index=False)
+    state_table.to_csv(artifact_dir / "risk_return_explain_state_table.csv", index=False)
 
     return metrics

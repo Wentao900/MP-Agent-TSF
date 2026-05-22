@@ -4,10 +4,27 @@ import numpy as np
 import pandas as pd
 
 
+def column_split(df: pd.DataFrame, config: dict) -> tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame]:
+    data_cfg = config["data"]
+    split_col = data_cfg.get("split_col", "split")
+    if split_col not in df.columns:
+        raise ValueError(f"split column '{split_col}' missing; use split_mode=date or build datasets first")
+
+    train = df[df[split_col] == "train"].reset_index(drop=True)
+    val = df[df[split_col] == "val"].reset_index(drop=True)
+    test = df[df[split_col] == "test"].reset_index(drop=True)
+    if len(train) == 0 or len(val) == 0 or len(test) == 0:
+        raise ValueError("each split must be non-empty")
+    return train, val, test
+
+
 def time_split(df: pd.DataFrame, config: dict) -> tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame]:
     data_cfg = config["data"]
     tcol = data_cfg["timestamp_col"]
     split_mode = str(data_cfg.get("split_mode", "ratio"))
+
+    if split_mode == "column":
+        return column_split(df, config)
 
     if split_mode == "date":
         val_start = pd.Timestamp(data_cfg["val_start_date"])
@@ -42,7 +59,14 @@ def time_split(df: pd.DataFrame, config: dict) -> tuple[pd.DataFrame, pd.DataFra
 
 
 def label_market_states(df: pd.DataFrame, config: dict) -> pd.Series:
+    regime_col = config["data"].get("regime_col", "market_regime")
+    if regime_col in df.columns:
+        states = df[regime_col].astype(str)
+        states = states.replace({"nan": "sideways"}).fillna("sideways")
+        return pd.Series(states.values, index=df.index, name="market_state")
+
     window = int(config["data"].get("market_state_window", 30))
-    rolling_ret = df["close"].pct_change(window).fillna(0.0)
+    close_col = "close" if "close" in df.columns else "Close"
+    rolling_ret = df[close_col].pct_change(window).fillna(0.0)
     states = np.where(rolling_ret > 0.01, "bull", np.where(rolling_ret < -0.01, "bear", "sideways"))
     return pd.Series(states, index=df.index, name="market_state")

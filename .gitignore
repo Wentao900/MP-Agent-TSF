@@ -28,6 +28,10 @@ htmlcov/
 raw/
 logs/
 outputs/
+data/processed/
+data/metadata/
+*.parquet
+outputs/data/
 
 # Large or generated checkpoints
 *.log

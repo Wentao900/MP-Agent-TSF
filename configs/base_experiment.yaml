@@ -1,0 +1,2 @@
+# 与 base.yaml 等价；保留此文件供显式引用
+extends: base.yaml

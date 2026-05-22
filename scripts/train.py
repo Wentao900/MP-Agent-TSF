@@ -4,8 +4,7 @@ import argparse
 from pathlib import Path
 
 from imtsa.config import load_config
-from imtsa.data.loader import build_supervised_targets, load_and_align_data, make_sequence_tensors
-from imtsa.data.split import time_split
+from imtsa.data.pipeline import build_eval_bundle, prepare_main_splits, save_scaler
 from imtsa.train.trainer import train_model
 from imtsa.utils import dump_json, ensure_dir, set_seed
 
@@ -24,13 +23,12 @@ def main() -> None:
     exp_dir = ensure_dir(Path(cfg["experiment"]["output_root"]) / exp_name)
     dump_json(exp_dir / "config_snapshot.json", cfg)
 
-    merged = load_and_align_data(cfg)
-    labeled = build_supervised_targets(merged, cfg)
-    train_df, val_df, test_df = time_split(labeled, cfg)
+    train_df, val_df, test_df, scaler = prepare_main_splits(cfg)
+    save_scaler(scaler, exp_dir / "scaler.joblib")
 
-    train_bundle = make_sequence_tensors(train_df, cfg)
-    val_bundle = make_sequence_tensors(val_df, cfg)
-    _ = make_sequence_tensors(test_df, cfg)
+    train_bundle = build_eval_bundle(train_df, cfg)
+    val_bundle = build_eval_bundle(val_df, cfg)
+    _ = build_eval_bundle(test_df, cfg)
 
     train_model(train_bundle, val_bundle, cfg, exp_dir)
 

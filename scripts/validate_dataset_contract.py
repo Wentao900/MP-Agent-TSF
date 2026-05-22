@@ -5,9 +5,7 @@ from pathlib import Path
 
 import pandas as pd
 
-
-PRICE_REQUIRED = ["timestamp", "symbol", "open", "high", "low", "close", "volume", "ret_1", "ret_5", "vol_5"]
-TEXT_REQUIRED = ["timestamp", "symbol", "sentiment", "relevance", "event_strength"]
+from imtsa.data import experiment_config as ec
 
 
 def assert_columns(df: pd.DataFrame, required: list[str], name: str) -> None:
@@ -16,82 +14,49 @@ def assert_columns(df: pd.DataFrame, required: list[str], name: str) -> None:
         raise ValueError(f"{name} missing required columns: {missing}")
 
 
-def assert_monotonic(df: pd.DataFrame, name: str) -> None:
-    if not df["timestamp"].is_monotonic_increasing:
-        raise ValueError(f"{name}.timestamp is not monotonic increasing")
+def assert_no_future_in_features() -> None:
+    overlap = [c for c in ec.LEAKAGE_COLS if c in ec.NUMERIC_INPUT_COLS]
+    if overlap:
+        raise ValueError(f"numeric feature list must not include future labels: {overlap}")
 
 
-def assert_no_null(df: pd.DataFrame, cols: list[str], name: str) -> None:
-    null_cols = [c for c in cols if df[c].isna().any()]
-    if null_cols:
-        raise ValueError(f"{name} has null values in columns: {null_cols}")
+def validate_parquet(aligned_path: Path, labels_path: Path) -> None:
+    aligned = pd.read_parquet(aligned_path)
+    labels = pd.read_parquet(labels_path)
 
+    assert_columns(aligned, ["Date", "ticker", "split"] + ec.NUMERIC_INPUT_COLS, "aligned")
+    assert_columns(labels, ["Date", "ticker", "action", "r_net"], "labels")
+    assert_no_future_in_features()
 
-def assert_ranges(text: pd.DataFrame) -> None:
-    if ((text["relevance"] < 0) | (text["relevance"] > 1)).any():
-        raise ValueError("text.relevance must be in [0,1]")
-    if ((text["event_strength"] < 0) | (text["event_strength"] > 1)).any():
-        raise ValueError("text.event_strength must be in [0,1]")
-    if ((text["sentiment"] < -1) | (text["sentiment"] > 1)).any():
-        raise ValueError("text.sentiment should be in [-1,1]")
+    for col in ec.FUTURE_LABEL_COLS:
+        if col in aligned.columns:
+            assert col not in ec.NUMERIC_INPUT_COLS
 
+    if not set(aligned["split"].unique()).issuperset({"train", "val", "test"}):
+        raise ValueError("aligned.split must contain train/val/test")
 
-def leakage_sanity(price: pd.DataFrame, text: pd.DataFrame) -> None:
-    p = price[["timestamp", "symbol"]].sort_values(["timestamp", "symbol"]).copy()
-    t = text[["timestamp", "symbol"]].sort_values(["timestamp", "symbol"]).copy()
+    dup = aligned.duplicated(subset=["Date", "ticker"]).sum()
+    if dup:
+        raise ValueError(f"aligned has duplicate (Date, ticker) keys: {dup}")
 
-    merged = pd.merge_asof(
-        p.sort_values("timestamp"),
-        t.sort_values("timestamp"),
-        on="timestamp",
-        by="symbol",
-        direction="backward",
-        allow_exact_matches=True,
-        suffixes=("_price", "_text"),
-    )
-
-    # merge_asof backward 本身防未来信息；这里只做覆盖率提醒
-    coverage = merged["timestamp"].notna().mean()
-    print(f"text backward-match coverage (sanity): {coverage:.4f}")
+    print("parquet dataset contract validation passed")
+    print(f"aligned rows={len(aligned)}, tickers={aligned['ticker'].nunique()}")
+    print(f"labels rows={len(labels)}, tickers={labels['ticker'].nunique()}")
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(description="Validate dataset contract for IMTSA pipeline")
-    parser.add_argument("--price-csv", default="outputs/data/price.csv")
-    parser.add_argument("--text-csv", default="outputs/data/text.csv")
+    parser = argparse.ArgumentParser(description="Validate parquet dataset contract for IMTSA pipeline")
+    parser.add_argument("--aligned-parquet", default="data/processed/aligned_daily_multimodal.parquet")
+    parser.add_argument("--labels-parquet", default="data/processed/labels_trading.parquet")
     args = parser.parse_args()
 
-    price_path = Path(args.price_csv)
-    text_path = Path(args.text_csv)
-    if not price_path.exists():
-        raise FileNotFoundError(f"price csv not found: {price_path}")
-    if not text_path.exists():
-        raise FileNotFoundError(f"text csv not found: {text_path}")
-
-    price = pd.read_csv(price_path)
-    text = pd.read_csv(text_path)
-
-    price["timestamp"] = pd.to_datetime(price["timestamp"])
-    text["timestamp"] = pd.to_datetime(text["timestamp"])
-
-    price = price.sort_values(["timestamp", "symbol"]).reset_index(drop=True)
-    text = text.sort_values(["timestamp", "symbol"]).reset_index(drop=True)
-
-    assert_columns(price, PRICE_REQUIRED, "price")
-    assert_columns(text, TEXT_REQUIRED, "text")
-
-    assert_no_null(price, PRICE_REQUIRED, "price")
-    assert_no_null(text, TEXT_REQUIRED, "text")
-
-    assert_monotonic(price, "price")
-    assert_monotonic(text, "text")
-
-    assert_ranges(text)
-    leakage_sanity(price, text)
-
-    print("dataset contract validation passed")
-    print(f"price rows={len(price)}, symbols={price['symbol'].nunique()}")
-    print(f"text rows={len(text)}, symbols={text['symbol'].nunique()}")
+    aligned_path = Path(args.aligned_parquet)
+    labels_path = Path(args.labels_parquet)
+    if not aligned_path.exists() or not labels_path.exists():
+        raise FileNotFoundError(
+            f"parquet not found under {aligned_path.parent}. Run: python scripts/build_datasets.py"
+        )
+    validate_parquet(aligned_path, labels_path)
 
 
 if __name__ == "__main__":
