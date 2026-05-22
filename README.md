@@ -1,418 +1,267 @@
-# IMTSA Research Scaffold（Phase 3 Enhanced）
+# IMTSA Research Scaffold
 
-本仓库是一个用于论文实验的可复现研究脚手架，覆盖从数据准备到训练、回测、消融与统计检验的完整闭环：
+可复现的多模态时序决策研究脚手架，覆盖 **Parquet 数据集 → 训练 → 回测（含 Holdout）→ 消融 → 统计检验**。
 
-`data -> train -> backtest -> ablation -> stats`
+论文对齐能力（Phase 3）：
 
-当前版本已完成 **Phase 3 论文对齐增强**，重点补齐 RQ2 / RQ3 / RQ4：
+| 研究问题 | 能力 |
+|----------|------|
+| **RQ2** | 轨迹级 Memory + K-step Reflector（`sequence_len` 展开） |
+| **RQ3** | 解释–性能联合指标（faithfulness / stability / tradeoff） |
+| **RQ4** | `market_regime` 分状态报表 + **Holdout 标的 OOS** |
 
-- **RQ2**：轨迹级 Memory + K-step Reflector
-- **RQ3**：解释-性能联合产物（step级、summary级、tradeoff级）
-- **RQ4**：bull/bear/sideways 分状态收益风险与解释稳定性报表
+详细字段与防泄漏规则见 [`docs/EXPERIMENT_DATA_GUIDE.md`](docs/EXPERIMENT_DATA_GUIDE.md)。
 
 ---
 
-## 1. 环境与安装
+## 1. 数据集形式（核心）
 
-### 1.1 Python 版本
-- 建议 `Python >= 3.10`（项目声明兼容到 3.12）
+训练与回测**只读 Parquet**，不直接读 `price.csv` / `text.csv`。中间 CSV 仅用于 `build_datasets.py` 编译。
 
-### 1.2 安装依赖
+### 1.1 应该使用的文件
+
+| 用途 | 路径 | 说明 |
+|------|------|------|
+| 主实验特征 | `data/processed/aligned_daily_multimodal.parquet` | 价量 + 宏观 + 文本 embedding + `split` + `market_regime` |
+| 主实验标签 | `data/processed/labels_trading.parquet` | `action` / `r_net` 等，按 `(Date, ticker)` 与 aligned merge |
+| RQ4 Holdout | `data/processed/holdout_aligned_daily.parquet` | Holdout **标的**不得出现在主 parquet |
+| Holdout 标签 | `data/processed/holdout_labels_trading.parquet` | 可选，有则 merge |
+| 切分元数据 | `data/metadata/splits.json` | 日期范围与 `main_tickers` / `holdout_tickers` |
+
+以上路径均在 `configs/base.yaml` 的 `data.*` 中配置；`data.source` 固定为 `parquet`。
+
+### 1.2 表结构摘要
+
+- **主键**：`(Date, ticker)`，**日频**一行
+- **划分**：列 `split` ∈ `train` / `val` / `test`（禁止 `random_split`）
+- **数值输入**（20 维）：`ret_1d`, `ret_5d`, `momentum_*`, `volatility_*`, 宏观列 `FEDFUNDS`…`VIXCLS` 等 → 见 `src/imtsa/data/experiment_config.py`
+- **文本输入**（32 维）：`text_emb_0` … `text_emb_31`（决策时刻单行，窗口内广播）
+- **标签**：`action`（0=Hold, 1=Buy, 2=Sell）、`r_net`（成本后收益，回测主指标）
+- **禁止作特征**：`future_ret_1d/5d/20d`（前视偏差）
+
+### 1.3 默认时间切分（`build_datasets.py`）
+
+| Split | 条件（默认） |
+|-------|----------------|
+| train | `Date < 2023-01-01` |
+| val | `2023-01-01 ≤ Date < 2024-01-01` |
+| test | `Date ≥ 2024-01-01` |
+
+可通过 `--val-start` / `--test-start` 调整。Workshop 配置见 `configs/*_workshop.yaml`（`seq_len: 32`）。
+
+### 1.4 序列与标准化
+
+- 回看窗口 **`seq_len: 60`**（交易日），按 **ticker** 分组滑窗，不跨股票
+- **StandardScaler** 仅在 `train` 上 fit，保存为 `outputs/<exp>/scaler.joblib`，val/test/holdout 复用
+
+---
+
+## 2. 环境与安装
+
+**Python >= 3.10**
+
 ```bash
 python -m pip install -U pip
-python -m pip install -r requirements.txt
-python -m pip install -e .
+pip install -r requirements.txt
+pip install -e .
 ```
 
-### 1.3 一键快速启动（数据抓取 + 构建 + 校验）
-```bash
-bash quickstart.sh
-```
-
-可选环境变量（示例）：
-```bash
-START_DATE=2024-01-01 END_DATE=2024-03-31 SYMBOLS=000001.SZ,600036.SH bash quickstart.sh
-```
-
-### 1.4 一键全市场启动（全A股）
-```bash
-bash quickstart_full_market.sh
-```
-
-可选环境变量（示例）：
-```bash
-START_DATE=2024-01-01 END_DATE=2024-06-30 BATCH_SIZE=80 AK_START_DATE=20240101 AK_END_DATE=20240630 bash quickstart_full_market.sh
-```
-
-### 1.5 失败后续跑（断点恢复）
-```bash
-bash quickstart_resume.sh
-```
-
-可选环境变量（示例）：
-```bash
-BATCH_SIZE=80 AK_START_DATE=20240101 AK_END_DATE=20240630 bash quickstart_resume.sh
-```
-
-如需顺带重试部分公告附件下载（前 N 条）：
-```bash
-RETRY_FAILED_MAX=500 bash quickstart_resume.sh
-```
-
-### 1.6 Workshop 论文数据（50 股 × 3 年，推荐）
+**GPU（CUDA 12.8，可选）**：
 
 ```bash
-./scripts/start_workshop_fetch.sh
+pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu128
 ```
 
-详见 [`docs/WORKSHOP_SUBMISSION.md`](docs/WORKSHOP_SUBMISSION.md)。
+未安装 GPU 版时，训练会自动回退 CPU（`torch.cuda.is_available()`）。
+
+可选依赖：`pip install -e ".[data]"`（AkShare / 巨潮抓取脚本）、`pip install -e ".[dev]"`（pytest）。
 
 ---
 
-## 2. 目录结构（核心）
+## 3. 构建数据集（必做）
 
-```text
-configs/
-  base.yaml
-  train_baseline.yaml
-  train_memory.yaml
-  train_reflector.yaml
+### 3.1 路径 A：本地合成数据（ smoke / 开发）
 
-scripts/
-  prepare_data.py
-  train.py
-  backtest.py
-  run_ablation.py
-  run_stats.py
-
-src/imtsa/
-  data/
-  models/
-  train/
-  backtest/
-  explain/
-  stats/
-
-tests/
-outputs/
-```
-
----
-
-## 3. 快速开始（最小闭环）
-
-### Step 1) 生成 Parquet 训练数据（**必须**）
 ```bash
-# 示例：先造 CSV，再编译为指南格式 parquet
-python scripts/prepare_data.py
-python scripts/build_datasets.py
+python scripts/prepare_data.py          # outputs/data/price.csv + text.csv
+python scripts/build_datasets.py      # 编译为 data/processed/*.parquet
 python scripts/validate_dataset_contract.py
 ```
-产物：
-- `data/processed/aligned_daily_multimodal.parquet`
-- `data/processed/labels_trading.parquet`
 
-训练/回测**仅**读取上述 parquet（`data.source: parquet`），见 `docs/EXPERIMENT_DATA_GUIDE.md`。
+多标的 Holdout 示例：
 
-默认已启用指南特性：`split` 列切分、`L=60` 按 ticker 滑窗、train-only scaler、Memory/Reflector 轨迹 `sequence_len`、`market_regime` 分状态回测、**RQ4 holdout**（`outputs/<exp>/holdout/`）。
+```bash
+python scripts/build_datasets.py --holdout-fraction 0.2
+```
 
-### Step 2) 单实验训练 + 回测（以 baseline 为例）
+### 3.2 路径 B：真实 A 股数据（Workshop / 生产）
+
+1. 抓取中间 CSV（**不进入训练**）：见 [`docs/DATA_PLAN.md`](docs/DATA_PLAN.md)、[`docs/WORKSHOP_SUBMISSION.md`](docs/WORKSHOP_SUBMISSION.md)  
+   - 一键：`./scripts/start_workshop_fetch.sh` 或 `scripts/auto_fetch_all.py`
+2. 编译 Parquet：
+
+```bash
+python scripts/build_price_from_akshare.py \
+  --symbols-file data/universe_paper_50.txt \
+  --start-date 20220101 --end-date 20241231 \
+  --output-csv outputs/data/price.csv
+
+python scripts/build_text_from_cn_sources.py \
+  --input-csv raw/cninfo_announcements_with_content.csv \
+  --output-csv outputs/data/text.csv
+
+python scripts/build_datasets.py \
+  --price-csv outputs/data/price.csv \
+  --text-csv outputs/data/text.csv \
+  --holdout-tickers-file path/to/holdout_tickers.txt   # 可选
+```
+
+`data/processed/` 与 `outputs/` 已在 `.gitignore` 中，需本地生成。
+
+---
+
+## 4. 训练与回测
+
+### 4.1 单实验
+
 ```bash
 python scripts/train.py --config configs/train_baseline.yaml
 python scripts/backtest.py --config configs/train_baseline.yaml
 ```
 
-### Step 3) 全量消融（多seed）
+回测自动完成：
+
+- **Test**：`outputs/<exp>/metrics.json`、`trades.csv`、regime 报表等
+- **Holdout（RQ4）**：`outputs/<exp>/holdout/`（存在 holdout parquet 时）
+- **汇总**：`outputs/<exp>/eval_summary.json`（test + holdout）
+
+跳过 Holdout：`python scripts/backtest.py --config ... --skip-holdout`
+
+### 4.2 消融矩阵（3 模型 × 3 seed）
+
+| 配置 | 模型 | `sequence_len` | 轨迹展开 |
+|------|------|----------------|----------|
+| `train_baseline.yaml` | baseline | 1 | 否 |
+| `train_memory.yaml` | +Memory | 2 | 是 |
+| `train_reflector.yaml` | +Reflector + Explain | 4 | 是 |
+
 ```bash
 python scripts/run_ablation.py
-```
-
-### Step 4) 统计检验与论文表
-```bash
 python scripts/run_stats.py
 ```
 
----
-
-## 4. 配置说明（Phase 3 新增重点）
-
-位置：`configs/base.yaml`
-
-### 4.1 训练序列与损失权重
-- `train.sequence_len`
-  - 训练时轨迹展开步数。
-  - `=1` 时保持旧版单步路径行为，确保向后兼容与可比性。
-- `train.lambda_reflect_corr`
-  - Reflector 校正损失权重。
-- `train.lambda_exp_faith`
-  - 解释 faithful 约束损失权重。
-- `train.lambda_exp_stability`
-  - 解释稳定性损失权重。
-- `train.lambda_exp`
-  - 解释主损失权重（当前实现下与 faithful/stability 联动）。
-
-### 4.2 解释扰动参数
-- `train.exp_perturb_ratio`
-  - 对高贡献/低贡献时间步做扰动时的比例。
-
-### 4.3 reward 归一化
-- `train.reward_norm_scale`
-  - Memory 中 prev_reward 归一化尺度（tanh 前缩放）。
+Workshop 时间 OOD 版本：`*_workshop.yaml`（`seq_len: 32`）。
 
 ---
 
-## 5. 三组实验开关（可比性）
+## 5. 目录结构
 
-通过以下配置文件控制：
-- `configs/train_baseline.yaml`
-- `configs/train_memory.yaml`
-- `configs/train_reflector.yaml`
-
-核心开关（`ablation`）：
-- `use_memory`
-- `use_reflector`
-- `use_explain_loss`
-
-这样可保证 baseline / memory / memory_reflector 三组可直接比较。
-
----
-
-## 6. Phase 3 关键产物清单
-
-以下文件会在每个实验目录下（如 `outputs/baseline/`、`outputs/memory_reflector/`）生成。
-
-### 6.1 原有基础合同（保留）
-- `metrics.json`
-- `trades.csv`
-- `config_snapshot.json`
-
-### 6.2 RQ3 解释-性能产物（新增）
-- `explain_step.csv`
-  - 逐步解释信息（alpha、动作概率、faithfulness、stability 等）
-- `explain_summary.json`
-  - 聚合解释指标
-- `tradeoff_summary.csv`
-  - 性能指标 + 解释指标联合行（论文表友好）
-
-### 6.3 RQ4 分状态产物（新增）
-- `metrics_by_regime.csv`
-  - bull/bear/sideways 的收益风险交易指标
-- `explain_by_regime.csv`
-  - 分状态解释稳定性与faithfulness
-- `risk_return_explain_state_table.csv`
-  - 可直接贴论文的分状态联合总表
-
-### 6.4 跨实验汇总与统计（新增）
-- `outputs/ablation_summary_rq2_rq3.csv`
-- `outputs/ablation_regime_summary.csv`
-- `outputs/stats_report_rq2_rq3_rq4.json`
-- `outputs/paper_table_main.csv`
-- `outputs/paper_table_regime.csv`
+```text
+configs/                 # base.yaml + train_*.yaml
+data/
+  processed/             # *.parquet（gitignore，本地生成）
+  metadata/splits.json
+  universe_paper_50.txt  # A 股股票池示例
+docs/
+  EXPERIMENT_DATA_GUIDE.md
+  DATA_PLAN.md
+  WORKSHOP_SUBMISSION.md
+scripts/
+  build_datasets.py      # CSV → Parquet（唯一训练入口数据源）
+  train.py / backtest.py
+  validate_dataset_contract.py
+  run_ablation.py / run_stats.py
+src/imtsa/
+  data/                  # loader, pipeline, experiment_config
+  models/ train/ backtest/ explain/ stats/
+tests/
+outputs/                 # 实验产物（gitignore）
+```
 
 ---
 
-## 7. 统计检验说明
+## 6. 实验产物
 
-`run_stats.py` 当前支持：
-- paired t-test
-- Wilcoxon signed-rank
-- Cohen's d
-- 多重比较校正：
-  - Holm
-  - BH-FDR
+每个 `outputs/<experiment_name>/`：
 
-说明：当样本过少或差值退化时，Wilcoxon 可能出现 runtime warning，这是统计函数常见现象，不代表流程失败；请结合输出文件完整性判断。
+| 文件 | 内容 |
+|------|------|
+| `config_snapshot.json` | 复现用配置 |
+| `scaler.joblib` | train 上 fit 的标准化器 |
+| `model.pt` | 权重 |
+| `metrics.json` / `trades.csv` | Test 集回测 |
+| `metrics_by_regime.csv` | bull / bear / sideways |
+| `explain_step.csv` / `tradeoff_summary.csv` | RQ3 |
+| `holdout/*` | RQ4 OOS（同结构） |
+| `eval_summary.json` | test + holdout 指标摘要 |
+
+汇总表：`outputs/ablation_summary*.csv`、`outputs/paper_table_*.csv`。
 
 ---
 
-## 8. 回归与测试
+## 7. 配置要点（`configs/base.yaml`）
 
-### 8.1 运行新增 Phase 3 合同测试
+```yaml
+data:
+  source: parquet
+  seq_len: 60
+  split_mode: column      # 使用 parquet 内 split 列
+  fit_scaler_on_train: true
+  eval_holdout: true
+
+model:
+  reflector_k: 15         # 与指南 REFLECT_EVERY_K 对齐
+
+backtest:
+  use_label_rewards: true # 以 r_net 为主
+```
+
+`ablation` 开关：`use_memory` / `use_reflector` / `use_explain_loss`（见各 `train_*.yaml`）。
+
+---
+
+## 8. 测试
+
 ```bash
-python -m pytest \
+python -m pytest tests/test_experiment_loader.py \
   tests/test_reflector_k_buffer.py \
   tests/test_trainer_sequence_unroll.py \
   tests/test_explain_outputs_contract.py \
   tests/test_regime_metrics_contract.py \
-  tests/test_stats_pipeline_phase3.py \
-  tests/test_smoke_e2e.py
+  tests/test_stats_pipeline_phase3.py
 ```
 
-### 8.2 覆盖点
-- K-step reflector 接口
-- 训练 sequence unroll
-- explain 输出合同
-- regime 输出合同
-- 统计 pipeline 合同
-- e2e smoke 合同
+端到端 smoke 需先完成训练并存在 `outputs/baseline/` 产物。
 
 ---
 
-## 9. 复现实验建议
+## 9. 常见问题
 
-1. 固定 `experiment.seed`，并通过 `--seed-offset` 运行多seed。
-2. 保持 `sequence_len=1` 先做 backward compatibility sanity check。
-3. 再切换到更大 `sequence_len` 进行 RQ2 轨迹增强实验。
-4. 统一使用 `run_ablation.py` + `run_stats.py` 生成论文总表，避免手工聚合口径不一致。
+**Q: 报错找不到 parquet？**  
+先运行 `python scripts/build_datasets.py`，再 `validate_dataset_contract.py`。
 
----
+**Q: 还能用 CSV 直接训练吗？**  
+不能。`load_main_panel()` 强制 `data.source: parquet`。
 
-## 10. 常见问题
+**Q: Holdout 没有生成？**  
+单标的或 `--holdout-fraction 0` 时会跳过；至少 2 个 ticker 且 `holdout-fraction > 0`，或使用 `--holdout-tickers-file`。
 
-### Q1: 为什么 baseline 也会生成 explain/regime 文件？
-为保证 pipeline 合同统一与 smoke 流程稳定，当前为全实验统一产出这类文件；差异由模型开关和指标数值体现。
+**Q: baseline 为何也有 explain / regime 文件？**  
+统一产出合同；差异体现在指标数值与 `ablation` 开关。
 
-### Q2: 如何确认 bull/bear/sideways 覆盖完整？
-查看 `risk_return_explain_state_table.csv` 的 `market_state` 列，预期包含三类。样本不足时对应统计值会是 NaN，但行仍保留。
-
-### Q3: 如何快速检查是否破坏旧流程？
-用 `sequence_len=1` 运行 baseline，确认 `metrics.json` / `trades.csv` 仍正常产出，并通过 `tests/test_smoke_e2e.py`。
+**Q: 抓取脚本与实验代码关系？**  
+抓取只产出 `outputs/data/*.csv`；**必须**经 `build_datasets.py` 转为 Parquet 后再训练。
 
 ---
 
-## 11. 论文复现实验配方（推荐）
+## 10. 延伸阅读
 
-本节给出可直接复现 RQ2/RQ3/RQ4 的命令与参数建议。
-
-### 11.1 实验矩阵（baseline / memory / memory_reflector）
-
-| 实验组 | 配置文件 | use_memory | use_reflector | use_explain_loss | sequence_len（建议） |
-|---|---|---:|---:|---:|---:|
-| baseline | `configs/train_baseline.yaml` | false | false | false | 1 |
-| memory | `configs/train_memory.yaml` | true | false | false | 1 或 2 |
-| memory_reflector | `configs/train_reflector.yaml` | true | true | true | 2 或 4 |
-
-说明：
-- 若目标是“严格向后兼容对照”，优先 `sequence_len=1`。
-- 若目标是突出 RQ2 轨迹增强效果，建议对 `memory_reflector` 提高 `sequence_len`（如 2/4）并保持其他组同口径对照。
-
-### 11.2 单组复现模板（以 memory_reflector 为例）
-
-```bash
-python scripts/train.py --config configs/train_reflector.yaml --seed-offset 0
-python scripts/backtest.py --config configs/train_reflector.yaml --seed-offset 0
-```
-
-多 seed：
-```bash
-python scripts/train.py --config configs/train_reflector.yaml --seed-offset 1
-python scripts/backtest.py --config configs/train_reflector.yaml --seed-offset 1
-python scripts/train.py --config configs/train_reflector.yaml --seed-offset 2
-python scripts/backtest.py --config configs/train_reflector.yaml --seed-offset 2
-```
-
-### 11.3 一键复现三组 + 统计
-
-```bash
-python scripts/run_ablation.py
-python scripts/run_stats.py
-```
-
-### 11.3.0 数据规模论证与论文 pilot 方案
-
-见 [`docs/DATA_PLAN.md`](docs/DATA_PLAN.md)。**NeurIPS/ICML FinML Workshop 投稿清单**见 [`docs/WORKSHOP_SUBMISSION.md`](docs/WORKSHOP_SUBMISSION.md)。
-
-快速估算：
-
-```bash
-python scripts/estimate_data_scale.py --years 3 --download-pdf
-```
-
-### 11.3.1 方案 C 抓取（一键全自动，推荐）
-
-一条命令跑完整流程（公告列表 → 分批下载附件 → 价格/文本特征 → 校验），断线后**原命令重跑即可续传**：
-
-```bash
-# 论文 pilot：50 只股票 × 3 年（推荐）
-python scripts/auto_fetch_all.py \
-  --start-date 2022-01-01 \
-  --end-date 2024-12-31 \
-  --universe-file data/universe_paper_50.txt \
-  --ak-start-date 20220101 \
-  --ak-end-date 20241231 \
-  --skip-content-fetch \
-  2>&1 | tee logs/auto_fetch_$(date +%Y%m%d_%H%M%S).log
-```
-
-常用参数：
-- `--skip-content-fetch`：只抓公告标题，不下载 PDF（快很多）
-- `--skip-crawl`：列表已齐全，只补下载
-- `--skip-price` / `--price-source none`：不拉行情，只建 `text.csv`
-- `--fetch-batch-size 500`：每批下载 500 条后退出，降低断线损失
-
-### 11.3.2 方案 C 抓取（分步 / 增量）
-
-先抓 raw 公告数据（按日窗口断点续爬）：
-```bash
-python scripts/crawl_cninfo_incremental.py \
-  --start-date 2024-01-01 \
-  --end-date 2024-12-31 \
-  --output-csv raw/cninfo_announcements.csv
-```
-
-（可选）下载公告附件并提取文本（HTML/TXT）：
-```bash
-python scripts/crawl_cninfo_content_fetch.py \
-  --input-csv raw/cninfo_announcements.csv \
-  --download-dir raw/cninfo_files \
-  --output-csv raw/cninfo_announcements_with_content.csv \
-  --sync-checkpoint --skip-existing \
-  --extract-html-text
-```
-
-再构建模型输入数据集（股票数据可二选一）：
-```bash
-# 方案A：Tushare 原始csv -> 价格特征
-python scripts/build_price_from_tushare.py --input-csv raw/price_tushare.csv --output-csv outputs/data/price.csv --freq daily
-
-# 方案B：AkShare 直接抓取 -> 价格特征（免Tushare积分）
-python scripts/build_price_from_akshare.py --symbols 000001.SZ,600036.SH --freq daily --start-date 20240101 --end-date 20241231 --output-csv outputs/data/price.csv
-
-# 文本特征 + 合同校验
-python scripts/build_text_from_cn_sources.py --input-csv raw/cninfo_announcements_with_content.csv --output-csv outputs/data/text.csv
-python scripts/validate_dataset_contract.py --price-csv outputs/data/price.csv --text-csv outputs/data/text.csv
-```
-
-### 11.4 关键超参数建议（可写入 `configs/base.yaml`）
-
-- `train.sequence_len`: `1`（兼容） / `2~4`（轨迹增强）
-- `train.lambda_reflect_corr`: `0.05 ~ 0.2`
-- `train.lambda_exp_faith`: `0.05 ~ 0.2`
-- `train.lambda_exp_stability`: `0.05 ~ 0.2`
-- `train.exp_perturb_ratio`: `0.1 ~ 0.2`
-- `train.reward_norm_scale`: `50 ~ 200`
-
-建议做小网格：先固定除一个参数外其他值，观察 `tradeoff_summary.csv` 与 `risk_return_explain_state_table.csv` 的联动。
-
-### 11.5 论文 RQ 与产物字段映射
-
-#### RQ2（Memory / Reflector 轨迹增强）
-- 主要看：
-  - `outputs/ablation_summary_rq2_rq3.csv` 中性能字段（`total_return`, `sharpe`, `max_drawdown`, `win_rate`）
-  - `outputs/stats_report_rq2_rq3_rq4.json` 的 `rq2_performance`
-
-#### RQ3（解释-性能联合）
-- 主要看：
-  - 每实验目录 `tradeoff_summary.csv`
-  - 每实验目录 `explain_summary.json`
-  - 汇总 `outputs/ablation_summary_rq2_rq3.csv`
-  - 统计 `stats_report_rq2_rq3_rq4.json` 的 `rq3_explain_tradeoff`
-
-#### RQ4（分状态泛化）
-- 主要看：
-  - 每实验目录 `metrics_by_regime.csv`
-  - 每实验目录 `explain_by_regime.csv`
-  - 每实验目录 `risk_return_explain_state_table.csv`
-  - 汇总 `outputs/ablation_regime_summary.csv`
-  - 统计 `stats_report_rq2_rq3_rq4.json` 的 `regime_tests`
-
-### 11.6 投稿表格直接来源建议
-
-- 主表（跨指标族显著性）：`outputs/paper_table_main.csv`
-- 分状态表（bull/bear/sideways）：`outputs/paper_table_regime.csv`
+- 字段级契约与代码映射：[`docs/EXPERIMENT_DATA_GUIDE.md`](docs/EXPERIMENT_DATA_GUIDE.md)
+- A 股 pilot 规模与抓取：[`docs/DATA_PLAN.md`](docs/DATA_PLAN.md)
+- Workshop 投稿清单：[`docs/WORKSHOP_SUBMISSION.md`](docs/WORKSHOP_SUBMISSION.md)
 
 ---
 
-## 12. 许可证与用途
+## 11. 许可证
 
-本仓库用于研究与论文实验验证。请在使用真实金融数据或部署到生产场景前，完成额外风险评估与合规审查。
+本仓库用于研究与论文实验验证。使用真实金融数据前请完成合规与风险评估。
